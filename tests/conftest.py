@@ -24,4 +24,15 @@ def _clean(store):
     with store.pool.connection() as conn:
         conn.execute("DELETE FROM memories")
         conn.execute("DELETE FROM runs")
+    # Keep the workspace clean so file-tool tests are self-contained regardless of
+    # prior test/demo/CLI runs (e.g. a leftover summary.txt would mask the
+    # deliberate missing-file failure the recovery test relies on).
+    ws = cfg.workspace_dir
+    if os.path.isdir(ws):
+        for f in os.listdir(ws):
+            if f != ".gitkeep":
+                try:
+                    os.remove(os.path.join(ws, f))
+                except OSError:
+                    pass
     yield
