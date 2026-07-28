@@ -1,0 +1,20 @@
+[project]
+name = "ai-agent"
+version = "1.0.0"
+description = "A tool-calling AI agent with a hand-written agent loop, sandboxed tools, long-term vector memory, and failure guardrails (circuit breaker, iteration limits). Runs keyless via a mock LLM or with Groq."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "psycopg[binary]",
+    "psycopg_pool",
+    "httpx",
+    "pydantic",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

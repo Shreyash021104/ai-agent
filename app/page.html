@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Loop — AI Agent</title>
+<style>
+  :root { --bg:#0b0e14; --panel:#141922; --border:#232a36; --fg:#e6e9ef; --muted:#8a93a6;
+          --green:#6ee7b7; --blue:#4f8cff; --amber:#f5a623; --red:#ff5c5c; --purple:#b392f0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:16px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:18px; margin:0; } .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);}
+  .pill{margin-left:auto;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);border:1px solid var(--border);padding:4px 10px;border-radius:999px;}
+  .wrap{max-width:900px;margin:0 auto;padding:24px;}
+  .composer{display:flex;gap:10px;margin-bottom:20px;}
+  input{flex:1;background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:14px;}
+  button{background:var(--blue);color:#fff;border:0;border-radius:10px;padding:12px 20px;font-weight:600;cursor:pointer;}
+  button:disabled{opacity:.5;cursor:default;}
+  .ex{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;}
+  .ex span{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 11px;cursor:pointer;}
+  .event{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--panel);}
+  .event .h{font-family:ui-monospace,monospace;font-size:12px;display:flex;align-items:center;gap:8px;}
+  .event .b{margin-top:8px;font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-word;}
+  .tc .h{color:var(--blue);} .tr .h{color:var(--green);} .te .h{color:var(--red);} .mem .h{color:var(--purple);}
+  .final{border-color:var(--green);background:rgba(110,231,183,.06);} .final .h{color:var(--green);}
+  .halt{border-color:var(--red);background:rgba(255,92,92,.06);} .halt .h{color:var(--red);}
+  .task{border-color:var(--border);opacity:.85;} .task .h{color:var(--fg);}
+</style>
+</head>
+<body>
+<header><span class="dot"></span><h1>Loop</h1><span style="color:var(--muted)">a tool-calling AI agent with memory</span>
+  <span class="pill" id="mode">…</span></header>
+<div class="wrap">
+  <div class="composer">
+    <input id="task" placeholder="Give the agent a task…" />
+    <button id="go">Run</button>
+  </div>
+  <div class="ex">
+    <span data-t="Compute the sum of 1..100 and save it to a file">▸ compute &amp; save to file</span>
+    <span data-t="Search the web for the capital of France">▸ web search</span>
+    <span data-t="What did I ask you to compute last time?">▸ recall a past task</span>
+  </div>
+  <div id="feed"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+fetch("/api/config").then(r=>r.json()).then(c=>{ $("mode").textContent = `LLM: ${c.llm} · breaker@${c.circuit_breaker_threshold}`; });
+
+document.querySelectorAll(".ex span").forEach(s => s.onclick = () => { $("task").value = s.dataset.t; });
+
+function card(cls, head, body) {
+  const d = document.createElement("div");
+  d.className = "event " + cls;
+  d.innerHTML = `<div class="h">${head}</div>` + (body ? `<div class="b">${body}</div>` : "");
+  $("feed").appendChild(d);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+async function run() {
+  const task = $("task").value.trim();
+  if (!task) return;
+  $("go").disabled = true;
+  $("feed").innerHTML = "";
+  card("task", "▸ TASK", esc(task));
+
+  const resp = await fetch("/run", {method:"POST", headers:{"content-type":"application/json"},
+                                    body: JSON.stringify({task})});
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const line = buf.slice(0, idx).trim(); buf = buf.slice(idx+2);
+      if (!line.startsWith("data:")) continue;
+      const ev = JSON.parse(line.slice(5).trim());
+      render(ev);
+    }
+  }
+  $("go").disabled = false;
+}
+
+function render(ev) {
+  switch (ev.type) {
+    case "memory": card("mem", `🧠 recalled ${ev.recalled.length} memory(ies)`,
+                         ev.recalled.map(m=>`• (${m.score}) ${esc(m.text)}`).join("\n")); break;
+    case "tool_call": card("tc", `🔧 tool · ${esc(ev.name)}`, esc(JSON.stringify(ev.args))); break;
+    case "tool_result": card("tr", `→ result · ${esc(ev.name)}`, esc(ev.result)); break;
+    case "tool_error": card("te", `✗ error · ${esc(ev.name)}`, esc(ev.error)); break;
+    case "final": card("final", "✅ final answer", esc(ev.answer)); break;
+    case "halted": card("halt", "⛔ halted", esc(ev.reason)); break;
+  }
+}
+$("go").onclick = run;
+$("task").addEventListener("keydown", e => { if (e.key === "Enter") run(); });
+</script>
+</body>
+</html>
